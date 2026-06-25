@@ -8,6 +8,10 @@ description = "The HTTP edge of ce-net: the only public HTTP tier. Serves conten
 name = "ce-serve"
 path = "src/main.rs"
 
+[[bin]]
+name = "ce-serve-publish"
+path = "src/bin/publish.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "signal", "fs"] }
@@ -22,3 +26,5 @@ anyhow = "1"
 # ce-rs SDK: how the edge reaches the mesh (drive the co-located ce node over http://127.0.0.1:8844).
 # The browser never holds the node token; ce-serve forwards mesh calls on its behalf over /mesh-bridge.
 ce-rs = { path = "../ce-rs" }
+# Used only by the ce-serve-publish tool to register a host->bundle in ce-hub over HTTP (admin op).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

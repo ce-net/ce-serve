@@ -1,0 +1,51 @@
+# ce-serve as a ce-gke Deployment — the HTTP edge is just an app the mesh runs.
+#
+# Apply:  ce-gke apply -f deploy/ce-serve.gke.yaml
+#   first set the node token secret the container uses to reach the mesh:
+#   ce-gke secret set ce-node-token "$(cat ~/.local/share/ce/api.token)"
+#
+# Public exposure (TLS, the ce-net.com domain) is a separate concern: Cloudflare/nginx forward to a
+# healthy ce-serve replica. ce-serve resolves Host -> bundle via ce-hub over the mesh and serves the
+# bytes from the content-addressed blob store, so "what it serves" is whatever is registered — no
+# redeploy to change the site.
+
+name: ce-serve
+image: ce-net/ce-serve:latest
+replicas: 2
+resources:
+  cpu_cores: 1
+  mem_mb: 256
+select:
+  - docker
+env:
+  # The container reaches the mesh through a co-located ce node. On a host with the node on the
+  # loopback, point at the host gateway; or run a node sidecar. Token comes from a ce-gke secret.
+  - name: CE_NODE_URL
+    value: http://host.docker.internal:8844
+  - name: CE_API_TOKEN
+    value_from:
+      secret: ce-node-token
+  - name: CE_SERVE_DEFAULT_HOST
+    value: ce-net.com
+  - name: CE_SERVE_PORT
+    value: "8790"
+# Liveness/readiness: ce-serve answers /healthz immediately (no mesh needed), so a hung replica is
+# replaced and only ready replicas take traffic.
+liveness:
+  type: http
+  port: 8790
+  path: /healthz
+  failure_threshold: 3
+  period_secs: 10
+readiness:
+  type: http
+  port: 8790
+  path: /healthz
+# Advertise the healthy edge replicas on the DHT as ce-gke/default/ce-serve.
+service: ce-serve
+bid: "5000000000000000000"   # 5 credits per replica (base units, 10^18 = 1 credit)
+duration_secs: 86400
+strategy:
+  type: rolling_update
+  max_unavailable: 0
+  max_surge: 1

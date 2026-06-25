@@ -25,13 +25,18 @@ use axum::routing::get;
 use axum::Router;
 
 mod mesh_bridge;
+mod resolve;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    /// Local static root for the default site bundle (the SvelteKit build output).
+    /// Resolves Host -> content-addressed bundle over the mesh (the production serving path).
+    resolver: Arc<resolve::Resolver>,
+    /// Local static root for the default site bundle — dev fallback when no bundle is registered.
     site_root: PathBuf,
-    /// Single-page-app fallback: unknown routes serve `/index.html` so the client router handles them.
+    /// Single-page-app fallback: unknown routes serve the fallback shell so the client router runs.
     spa: bool,
+    /// Default host to resolve when a request omits Host (e.g. health probes); usually "ce-net.com".
+    default_host: String,
 }
 pub(crate) type Shared = Arc<AppState>;
 
@@ -66,7 +71,13 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(8790);
 
-    let state: Shared = Arc::new(AppState { site_root, spa });
+    let default_host = std::env::var("CE_SERVE_DEFAULT_HOST").unwrap_or_default();
+    let state: Shared = Arc::new(AppState {
+        resolver: Arc::new(resolve::Resolver::new(node_url())),
+        site_root,
+        spa,
+        default_host,
+    });
 
     let app = Router::new()
         // The transport installer + the bridge socket: the edge's mesh surface for browsers.
@@ -101,20 +112,68 @@ async fn serve_bridge_js() -> impl IntoResponse {
 async fn serve_content(
     axum::extract::State(st): axum::extract::State<Shared>,
     uri: Uri,
-    _headers: HeaderMap,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    // NEXT: map `host` -> appId -> bundle CID via ce-hub over the mesh, and pick the app's root.
-    // v0 serves the single configured site bundle.
     let Some(key) = norm_path(uri.path()) else {
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
     };
 
-    match load_file(&st.site_root, &key).await {
+    // Production path: resolve Host -> content-addressed bundle over the mesh and serve from blobs.
+    let host = req_host(&headers, &st.default_host);
+    if !host.is_empty() {
+        if let Some(bref) = st.resolver.resolve_host(&host).await {
+            return serve_from_bundle(&st, &bref, &key)
+                .await
+                .unwrap_or_else(|| (StatusCode::NOT_FOUND, "not found").into_response());
+        }
+    }
+
+    // Dev fallback: serve the local bundle dir (CE_SERVE_ROOT) when no bundle is registered.
+    serve_from_dir(&st, &key).await
+}
+
+/// The request Host, lowercased and without port; falls back to the configured default host.
+fn req_host(headers: &HeaderMap, default: &str) -> String {
+    let h = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|h| h.split(':').next().unwrap_or(h).trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if h.is_empty() {
+        default.to_ascii_lowercase()
+    } else {
+        h
+    }
+}
+
+/// Serve one path from a resolved content-addressed bundle: look up the file cid in the manifest
+/// (SPA fallback to 200.html/index.html), fetch the blob, inject the bridge into HTML.
+async fn serve_from_bundle(st: &Shared, bref: &resolve::BundleRef, key: &str) -> Option<axum::response::Response> {
+    let manifest = st.resolver.manifest(&bref.cid).await?;
+    let want = if key.is_empty() { "index.html" } else { key };
+    let (file_cid, ct) = match manifest.files.get(want) {
+        Some(cid) => (cid.clone(), mime_for(want).to_string()),
+        None => {
+            if !(bref.spa || manifest.spa) {
+                return None;
+            }
+            let cid = manifest
+                .files
+                .get("200.html")
+                .or_else(|| manifest.files.get("index.html"))?
+                .clone();
+            (cid, "text/html; charset=utf-8".to_string())
+        }
+    };
+    let bytes = st.resolver.blob(&file_cid).await?;
+    Some(respond_file(bytes, ct))
+}
+
+/// Dev fallback: serve from the local bundle dir with SPA fallback.
+async fn serve_from_dir(st: &Shared, key: &str) -> axum::response::Response {
+    match load_file(&st.site_root, key).await {
         Some((bytes, ct)) => respond_file(bytes, ct),
         None => {
-            // SPA fallback: serve the fallback shell so the client router handles unknown routes.
-            // Prefer adapter-static's `200.html` (so a prerendered index.html keeps its real content),
-            // then fall back to index.html for bundles that don't ship a separate fallback page.
             if st.spa {
                 for name in ["200.html", "index.html"] {
                     if let Some((bytes, _)) = load_file(&st.site_root, name).await {
