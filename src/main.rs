@@ -112,10 +112,14 @@ async fn serve_content(
     match load_file(&st.site_root, &key).await {
         Some((bytes, ct)) => respond_file(bytes, ct),
         None => {
-            // SPA fallback: serve index.html so the client router handles unknown routes.
+            // SPA fallback: serve the fallback shell so the client router handles unknown routes.
+            // Prefer adapter-static's `200.html` (so a prerendered index.html keeps its real content),
+            // then fall back to index.html for bundles that don't ship a separate fallback page.
             if st.spa {
-                if let Some((bytes, _)) = load_file(&st.site_root, "index.html").await {
-                    return respond_file(bytes, "text/html; charset=utf-8".into());
+                for name in ["200.html", "index.html"] {
+                    if let Some((bytes, _)) = load_file(&st.site_root, name).await {
+                        return respond_file(bytes, "text/html; charset=utf-8".into());
+                    }
                 }
             }
             (StatusCode::NOT_FOUND, "not found").into_response()
