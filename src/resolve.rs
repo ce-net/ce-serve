@@ -16,7 +16,7 @@ use serde_json::json;
 const RESOLVE_TOPIC: &str = "ce-hub/resolve/1";
 const HUB_SERVICE: &str = "ce-hub";
 const RESOLVE_TTL: Duration = Duration::from_secs(30);
-const REQUEST_TIMEOUT_MS: u64 = 8_000;
+const REQUEST_TIMEOUT_MS: u64 = 2_500;
 /// Crude bound on the immutable blob cache: clear it when it grows past this many bytes.
 const BLOB_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -95,14 +95,29 @@ impl Resolver {
             }
         }
         let resolved = self.resolve_host_uncached(host).await;
-        self.host_cache
-            .lock()
-            .unwrap()
-            .insert(host.to_string(), (Instant::now(), resolved.clone()));
+        // Cache only SUCCESSES. A flaky mesh self-delivery must never poison a registered host into a
+        // 30s 404 — on failure we leave the cache empty so the very next request retries (and the HTTP
+        // fallback below makes that retry reliable).
+        if resolved.is_some() {
+            self.host_cache
+                .lock()
+                .unwrap()
+                .insert(host.to_string(), (Instant::now(), resolved.clone()));
+        }
         resolved
     }
 
     async fn resolve_host_uncached(&self, host: &str) -> Option<BundleRef> {
+        // Mesh-native path first (ask ce-hub over the mesh).
+        if let Some(b) = self.resolve_via_mesh(host).await {
+            return Some(b);
+        }
+        // Robust fallback: ce-hub's HTTP /bundles (co-located, reliable, ~1ms). So a flaky mesh
+        // self-delivery never makes a registered bundle 404.
+        self.resolve_via_http(host).await
+    }
+
+    async fn resolve_via_mesh(&self, host: &str) -> Option<BundleRef> {
         let ce = self.ce();
         let hub = self.hub_node(&ce).await?;
         let payload = json!({ "host": host }).to_string().into_bytes();
@@ -115,6 +130,27 @@ impl Resolver {
             }
         };
         let bref: BundleRef = serde_json::from_slice(&reply).ok()?;
+        if bref.app_id.is_empty() || bref.cid.is_empty() {
+            return None;
+        }
+        Some(bref)
+    }
+
+    /// Resolve via ce-hub's HTTP `/bundles/<host>` (CE_HUB_URL, default localhost:8970).
+    async fn resolve_via_http(&self, host: &str) -> Option<BundleRef> {
+        let base =
+            std::env::var("CE_HUB_URL").unwrap_or_else(|_| "http://127.0.0.1:8970".to_string());
+        let url = format!("{}/bundles/{}", base.trim_end_matches('/'), host);
+        let resp = reqwest::Client::new()
+            .get(&url)
+            .timeout(Duration::from_millis(2_000))
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let bref: BundleRef = resp.json().await.ok()?;
         if bref.app_id.is_empty() || bref.cid.is_empty() {
             return None;
         }
