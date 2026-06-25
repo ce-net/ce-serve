@@ -1,0 +1,24 @@
+[package]
+name = "ce-serve"
+version = "0.1.0"
+edition = "2021"
+description = "The HTTP edge of ce-net: the only public HTTP tier. Serves content-addressed app bundles (incl. the Svelte ce-net.com frontend) over HTTP, and hosts the /mesh-bridge WebSocket so a served page becomes a real mesh node. Everything else is a mesh backend it reaches over the mesh, not HTTP."
+
+[[bin]]
+name = "ce-serve"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "signal", "fs"] }
+tower-http = { version = "0.5", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+# ce-rs SDK: how the edge reaches the mesh (drive the co-located ce node over http://127.0.0.1:8844).
+# The browser never holds the node token; ce-serve forwards mesh calls on its behalf over /mesh-bridge.
+ce-rs = { path = "../ce-rs" }
