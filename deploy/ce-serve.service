@@ -1,0 +1,20 @@
+[Unit]
+Description=ce-serve — the ce-net HTTP edge (serves content-addressed bundles + /mesh-bridge)
+After=network.target ce-relay.service
+Wants=ce-relay.service
+
+[Service]
+# Reaches the mesh through the co-located ce node; reads the node API token from the default data dir
+# (/root/.local/share/ce/api.token) since it runs as root on the relay. Resolves Host -> bundle via
+# ce-hub over the mesh and serves the bytes from the content-addressed blob store.
+ExecStart=/opt/ce-serve/ce-serve
+Environment=CE_SERVE_PORT=8790
+Environment=CE_NODE_URL=http://127.0.0.1:8844
+Environment=CE_SERVE_DEFAULT_HOST=ce-net.com
+Environment=CE_SERVE_ROOT=/opt/ce-serve/site
+Restart=always
+RestartSec=2
+User=root
+
+[Install]
+WantedBy=multi-user.target

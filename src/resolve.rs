@@ -59,13 +59,30 @@ impl Resolver {
         ce_rs::CeClient::with_token(self.node_url.clone(), ce_rs::discover_api_token())
     }
 
-    /// The ce-hub node id, found via the DHT and cached. Re-resolves if the cached one is empty.
+    /// The ce-hub node id to send resolve requests to, cached. Resolution order:
+    ///   1. `CE_HUB_NODE` env (explicit), 2. `find_service("ce-hub")` on the DHT (distributed case),
+    ///   3. the LOCAL node id (co-located case — ce-hub shares this node; a node's DHT discovery does
+    ///      not return its own advertisement, and self-delivery routes the request locally to ce-hub).
     async fn hub_node(&self, ce: &ce_rs::CeClient) -> Option<String> {
         if let Some(n) = self.hub_node.lock().unwrap().clone() {
             return Some(n);
         }
-        let providers = ce.find_service(HUB_SERVICE).await.ok()?;
-        let node = providers.into_iter().next()?;
+        let node = if let Some(n) = std::env::var("CE_HUB_NODE").ok().filter(|s| !s.is_empty()) {
+            n
+        } else if let Some(n) = ce
+            .find_service(HUB_SERVICE)
+            .await
+            .ok()
+            .and_then(|p| p.into_iter().next())
+        {
+            n
+        } else {
+            // Co-located fallback: resolve against this node (ce-hub is here too).
+            ce.status().await.ok()?.node_id
+        };
+        if node.is_empty() {
+            return None;
+        }
         *self.hub_node.lock().unwrap() = Some(node.clone());
         Some(node)
     }

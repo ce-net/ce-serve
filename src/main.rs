@@ -154,15 +154,22 @@ async fn serve_from_bundle(st: &Shared, bref: &resolve::BundleRef, key: &str) ->
     let (file_cid, ct) = match manifest.files.get(want) {
         Some(cid) => (cid.clone(), mime_for(want).to_string()),
         None => {
-            if !(bref.spa || manifest.spa) {
+            // Prerendered route mapping: /apps -> apps.html, /foo -> foo/index.html.
+            let html_key = format!("{want}.html");
+            let idx_key = format!("{want}/index.html");
+            if let Some(cid) = manifest.files.get(&html_key).or_else(|| manifest.files.get(&idx_key)) {
+                (cid.clone(), "text/html; charset=utf-8".to_string())
+            } else if bref.spa || manifest.spa {
+                // SPA fallback shell (client router handles the route).
+                let cid = manifest
+                    .files
+                    .get("200.html")
+                    .or_else(|| manifest.files.get("index.html"))?
+                    .clone();
+                (cid, "text/html; charset=utf-8".to_string())
+            } else {
                 return None;
             }
-            let cid = manifest
-                .files
-                .get("200.html")
-                .or_else(|| manifest.files.get("index.html"))?
-                .clone();
-            (cid, "text/html; charset=utf-8".to_string())
         }
     };
     let bytes = st.resolver.blob(&file_cid).await?;
