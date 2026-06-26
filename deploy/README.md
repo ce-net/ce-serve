@@ -9,7 +9,7 @@ by ce-hub and fetched from the mesh blob store.
 | App | What it is | Deployed by |
 |---|---|---|
 | `ce-serve` | the one HTTP edge: serves bundles + `/mesh-bridge` | `ce-gke apply -f ce-serve/deploy/ce-serve.gke.yaml` |
-| `game-spacegame` | the flagship scale-test backend (healed mesh service) | `ce-gke apply -f game-spacegame/deploy/*.gke.yaml` |
+| `spacegame` | the flagship scale-test backend (healed mesh service) | `ce-gke apply -f spacegame/deploy/*.gke.yaml` |
 | `ce-net-site` (Svelte) | the ce-net.com frontend bundle | `ce-serve-publish` (below) |
 | `ce-hub` | the registry/tracker (hosts nothing) | `web/deploy/ce-build.sh hub` |
 
@@ -18,7 +18,7 @@ by ce-hub and fetched from the mesh blob store.
 ```
 # from the workspace root (build context needs the sibling ce-rs):
 docker build -f ce-serve/Dockerfile -t ce-net/ce-serve:latest .
-# game-spacegame is an analogous ce-rs binary
+# spacegame is an analogous ce-rs binary
 ```
 
 ## 2. Give the apps a node token (so a container can reach the mesh)
@@ -31,7 +31,7 @@ ce-gke secret set ce-node-token "$(cat ~/.local/share/ce/api.token)"
 
 ```
 ce-gke apply -f ce-serve/deploy/ce-serve.gke.yaml
-ce-gke apply -f game-spacegame/deploy/spacegame.gke.yaml   # flagship scale test
+ce-gke apply -f spacegame/deploy/spacegame.gke.yaml   # flagship scale test
 ce-gke get        # READY counts; ce-gke heals replicas on host churn
 ```
 
