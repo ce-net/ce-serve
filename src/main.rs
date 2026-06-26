@@ -118,11 +118,17 @@ async fn serve_content(
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
     };
 
+    // Conditional GET: the browser sends back the content-id ETag we gave it; if it still matches, 304.
+    let inm = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().trim_matches('"').to_string());
+
     // Production path: resolve Host -> content-addressed bundle over the mesh and serve from blobs.
     let host = req_host(&headers, &st.default_host);
     if !host.is_empty() {
         if let Some(bref) = st.resolver.resolve_host(&host).await {
-            return serve_from_bundle(&st, &bref, &key)
+            return serve_from_bundle(&st, &bref, &key, inm.as_deref())
                 .await
                 .unwrap_or_else(|| (StatusCode::NOT_FOUND, "not found").into_response());
         }
@@ -148,7 +154,7 @@ fn req_host(headers: &HeaderMap, default: &str) -> String {
 
 /// Serve one path from a resolved content-addressed bundle: look up the file cid in the manifest
 /// (SPA fallback to 200.html/index.html), fetch the blob, inject the bridge into HTML.
-async fn serve_from_bundle(st: &Shared, bref: &resolve::BundleRef, key: &str) -> Option<axum::response::Response> {
+async fn serve_from_bundle(st: &Shared, bref: &resolve::BundleRef, key: &str, inm: Option<&str>) -> Option<axum::response::Response> {
     let manifest = st.resolver.manifest(&bref.cid).await?;
     let want = if key.is_empty() { "index.html" } else { key };
     let (file_cid, ct) = match manifest.files.get(want) {
@@ -172,19 +178,24 @@ async fn serve_from_bundle(st: &Shared, bref: &resolve::BundleRef, key: &str) ->
             }
         }
     };
+    // The file's content id IS its strong validator. If the browser already holds this exact content,
+    // answer 304 — no re-download — even though the filename (e.g. pkg/app_bg.wasm) is stable across deploys.
+    if inm == Some(file_cid.as_str()) && !ct.starts_with("text/html") {
+        return Some((StatusCode::NOT_MODIFIED, [(header::ETAG, format!("\"{file_cid}\""))]).into_response());
+    }
     let bytes = st.resolver.blob(&file_cid).await?;
-    Some(respond_file(bytes, ct))
+    Some(respond_file(bytes, ct, Some(&file_cid)))
 }
 
 /// Dev fallback: serve from the local bundle dir with SPA fallback.
 async fn serve_from_dir(st: &Shared, key: &str) -> axum::response::Response {
     match load_file(&st.site_root, key).await {
-        Some((bytes, ct)) => respond_file(bytes, ct),
+        Some((bytes, ct)) => respond_file(bytes, ct, None),
         None => {
             if st.spa {
                 for name in ["200.html", "index.html"] {
                     if let Some((bytes, _)) = load_file(&st.site_root, name).await {
-                        return respond_file(bytes, "text/html; charset=utf-8".into());
+                        return respond_file(bytes, "text/html; charset=utf-8".into(), None);
                     }
                 }
             }
@@ -193,11 +204,41 @@ async fn serve_from_dir(st: &Shared, key: &str) -> axum::response::Response {
     }
 }
 
-fn respond_file(bytes: Vec<u8>, ct: String) -> axum::response::Response {
+fn respond_file(bytes: Vec<u8>, ct: String, etag: Option<&str>) -> axum::response::Response {
+    // Bundle files have STABLE names (index.html, pkg/app_bg.wasm, …) but content that changes every
+    // deploy, so a long browser/edge cache serves stale bytes — and a wasm vs JS-glue VERSION MISMATCH
+    // ("import requires a callable"). HTML is never cached (it points at the live bundle). Other files
+    // carry their content id as a strong ETag with `no-cache`, so the browser and the CDN revalidate and
+    // get a cheap 304 when unchanged or the new bytes the moment the content (hence the id) changes.
     if ct.starts_with("text/html") {
-        return ([(header::CONTENT_TYPE, ct)], inject_bridge(&bytes)).into_response();
+        return (
+            [
+                (header::CONTENT_TYPE, ct),
+                (header::CACHE_CONTROL, "no-cache, must-revalidate".to_string()),
+            ],
+            inject_bridge(&bytes),
+        )
+            .into_response();
     }
-    ([(header::CONTENT_TYPE, ct)], bytes).into_response()
+    match etag {
+        Some(e) => (
+            [
+                (header::CONTENT_TYPE, ct),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+                (header::ETAG, format!("\"{e}\"")),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => (
+            [
+                (header::CONTENT_TYPE, ct),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+    }
 }
 
 /// Load a file's bytes + content-type for a normalized key, mapping a directory/empty key to
