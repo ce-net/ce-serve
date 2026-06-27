@@ -1,0 +1,31 @@
+# ce-serve — the public HTTP edge, as an INSTALLABLE ceapp (not hardcoded infra). Install it on any node
+# with a public address to make that node an INGRESS PROVIDER: it then advertises the `http-ingress`
+# capability, and apps that `requires = ["http-ingress"]` get placed/routed onto it. The domain<->app
+# mapping is ce-serve's OWN concern (its api), never a `ce app` verb. Swap ce-serve for another ingress
+# app and nothing in ce-appmgr changes.
+[app]
+name    = "ce-serve"
+version = "0.1.0"
+summary = "Public HTTP edge: serves content-addressed app bundles + injects the mesh bridge; the ingress"
+runtime = "native"
+# Capability this app PROVIDES to its host node while running (folded into the node's atlas tags).
+provides = ["http-ingress"]
+publisher = "c0be11e0ce0aaa769da6f9970244947d3d32a0c0d8302fb5f41f73d7950be456"
+
+[native]
+bin = "ce-serve"
+[native.artifacts]
+"darwin-amd64" = "PLACEHOLDER_darwin_amd64"
+"linux-amd64"  = "PLACEHOLDER_linux_amd64"
+
+[sandbox]
+# The public edge: a host app that binds an HTTP port and proxies to the local node + blob store. Not a
+# gVisor jail; nginx/Cloudflare is the public-TLS layer in front.
+tier       = "none"
+net        = "none"
+capability = "inherit"
+
+[daemon]
+# The ce-serve binary IS the daemon (no subcommand); the single supervisor keeps it running.
+enabled = true
+restart = "on-failure"
