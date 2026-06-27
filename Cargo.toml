@@ -1,16 +1,16 @@
 [package]
 name = "ce-serve"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "The HTTP edge of ce-net: the only public HTTP tier. Serves content-addressed app bundles (incl. the Svelte ce-net.com frontend) over HTTP, and hosts the /mesh-bridge WebSocket so a served page becomes a real mesh node. Everything else is a mesh backend it reaches over the mesh, not HTTP."
 
 [[bin]]
 name = "ce-serve"
 path = "src/main.rs"
 
-[[bin]]
-name = "ce-serve-publish"
-path = "src/bin/publish.rs"
+# ce-serve-publish was MOVED to the standalone `ce-publish` app (~/ce-net/ce-publish): publishing is a
+# workflow over node primitives, not ce-serve's concern. ce-publish does web bundles AND native/wasm
+# artifact+manifest publishing, superseding both this bin and the hardcoded `ce app publish`.
 
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }
