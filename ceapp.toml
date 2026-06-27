@@ -15,8 +15,8 @@ publisher = "c0be11e0ce0aaa769da6f9970244947d3d32a0c0d8302fb5f41f73d7950be456"
 [native]
 bin = "ce-serve"
 [native.artifacts]
-"darwin-amd64" = "PLACEHOLDER_darwin_amd64"
-"linux-amd64"  = "PLACEHOLDER_linux_amd64"
+"darwin-amd64" = "e8ff114f241f8cbe18ae5e14ff935f52f0a2d3a7f3fbc187020e39012b5b1052"
+"linux-amd64"  = "3cc8c4a3e3bcc6d582529fc218526a24ef4946d051c6a534ca711f347c4313b4"
 
 [sandbox]
 # The public edge: a host app that binds an HTTP port and proxies to the local node + blob store. Not a
