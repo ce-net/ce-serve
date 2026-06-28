@@ -25,6 +25,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 # ce-rs SDK: how the edge reaches the mesh (drive the co-located ce node over http://127.0.0.1:8844).
 # The browser never holds the node token; ce-serve forwards mesh calls on its behalf over /mesh-bridge.
-ce-rs = { path = "../ce-rs" }
+ce-rs = { git = "https://github.com/ce-net/ce-rs" }
 # Used only by the ce-serve-publish tool to register a host->bundle in ce-hub over HTTP (admin op).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

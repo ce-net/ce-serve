@@ -184,18 +184,18 @@ async fn serve_from_bundle(st: &Shared, bref: &resolve::BundleRef, key: &str, in
         return Some((StatusCode::NOT_MODIFIED, [(header::ETAG, format!("\"{file_cid}\""))]).into_response());
     }
     let bytes = st.resolver.blob(&file_cid).await?;
-    Some(respond_file(bytes, ct, Some(&file_cid)))
+    Some(respond_file(bytes, ct, Some(&file_cid), is_immutable_asset(want)))
 }
 
 /// Dev fallback: serve from the local bundle dir with SPA fallback.
 async fn serve_from_dir(st: &Shared, key: &str) -> axum::response::Response {
     match load_file(&st.site_root, key).await {
-        Some((bytes, ct)) => respond_file(bytes, ct, None),
+        Some((bytes, ct)) => respond_file(bytes, ct, None, is_immutable_asset(key)),
         None => {
             if st.spa {
                 for name in ["200.html", "index.html"] {
                     if let Some((bytes, _)) = load_file(&st.site_root, name).await {
-                        return respond_file(bytes, "text/html; charset=utf-8".into(), None);
+                        return respond_file(bytes, "text/html; charset=utf-8".into(), None, false);
                     }
                 }
             }
@@ -204,12 +204,39 @@ async fn serve_from_dir(st: &Shared, key: &str) -> axum::response::Response {
     }
 }
 
-fn respond_file(bytes: Vec<u8>, ct: String, etag: Option<&str>) -> axum::response::Response {
+/// Whether a path is a CONTENT-HASHED bundle asset (the hash is in the filename, e.g. vite's
+/// `index-D_NtxU66.js`, `app-DCKp3R-I.wasm`). The URL changes whenever the bytes do, so it can be
+/// cached forever (`immutable`) — no revalidation round-trip. Stable-named bundles (spacegame's
+/// `boot.js`, `pkg/app_bg.wasm`) do NOT match and keep revalidating via ETag, which is correct for them.
+fn is_immutable_asset(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let Some(dot) = name.rfind('.') else { return false };
+    let (stem, ext) = (&name[..dot], &name[dot + 1..]);
+    if !matches!(
+        ext,
+        "js" | "css" | "wasm" | "woff" | "woff2" | "ttf" | "otf" | "png" | "jpg" | "jpeg" | "gif"
+            | "svg" | "webp" | "avif" | "ico" | "map"
+    ) {
+        return false;
+    }
+    // A trailing `-<hash>` segment of >=8 url-safe chars marks a content hash.
+    match stem.rfind('-') {
+        Some(dash) => {
+            let hash = &stem[dash + 1..];
+            hash.len() >= 8 && hash.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        }
+        None => false,
+    }
+}
+
+fn respond_file(bytes: Vec<u8>, ct: String, etag: Option<&str>, immutable: bool) -> axum::response::Response {
     // Bundle files have STABLE names (index.html, pkg/app_bg.wasm, …) but content that changes every
     // deploy, so a long browser/edge cache serves stale bytes — and a wasm vs JS-glue VERSION MISMATCH
     // ("import requires a callable"). HTML is never cached (it points at the live bundle). Other files
     // carry their content id as a strong ETag with `no-cache`, so the browser and the CDN revalidate and
     // get a cheap 304 when unchanged or the new bytes the moment the content (hence the id) changes.
+    // EXCEPTION: content-hashed assets (the hash is in the URL) are immutable -> cache for a year, no
+    // revalidation at all. That is the fast path for vite-style bundles (cast).
     if ct.starts_with("text/html") {
         return (
             [
@@ -220,21 +247,19 @@ fn respond_file(bytes: Vec<u8>, ct: String, etag: Option<&str>) -> axum::respons
         )
             .into_response();
     }
+    let cc = if immutable { "public, max-age=31536000, immutable" } else { "no-cache" };
     match etag {
         Some(e) => (
             [
                 (header::CONTENT_TYPE, ct),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
+                (header::CACHE_CONTROL, cc.to_string()),
                 (header::ETAG, format!("\"{e}\"")),
             ],
             bytes,
         )
             .into_response(),
         None => (
-            [
-                (header::CONTENT_TYPE, ct),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
-            ],
+            [(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, cc.to_string())],
             bytes,
         )
             .into_response(),
